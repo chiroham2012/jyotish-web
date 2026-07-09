@@ -1,0 +1,112 @@
+{
+  "_about": "この台紙PDF専用のキャリブレーション。すべて PDF のポイント単位（72pt=1inch、原点は左上＝PyMuPDF座標系）。台紙デザインを差し替えたら、grid と header を測り直す。",
+  "page": { "width": 351.95, "height": 537.92 },
+  "_measure_note": "4倍レンダリングのピクセル値を /4 してポイント化した実測値。grid_x/grid_y は罫線、header は文字の基準点。",
+
+  "grid": {
+    "_desc": "南インド式4x4の罫線。x は左→右の5本、y は上→下の5本。セル(col,row)の箱は x[col]..x[col+1], y[row]..y[row+1]。",
+    "x": [10.5, 70.0, 131.75, 195.0, 254.5],
+    "y": [136.25, 200.5, 271.25, 341.25, 408.75]
+  },
+
+  "sign_layout": {
+    "_desc": "サイン→[col,row]（南インド式は固定配置）。col=0..3 左→右、row=0..3 上→下。",
+    "Pisces": [0, 0], "Aries": [1, 0], "Taurus": [2, 0], "Gemini": [3, 0],
+    "Cancer": [3, 1], "Leo": [3, 2], "Virgo": [3, 3], "Libra": [2, 3],
+    "Scorpio": [1, 3], "Sagittarius": [0, 3], "Capricorn": [0, 2], "Aquarius": [0, 1]
+  },
+
+  "cell_layout": {
+    "_desc": "各セル内の配置（ポイント）。サインラベルは台紙に印刷済みなので描かない。惑星は左上から下へ積む。",
+    "planet_left_inset": 5.0,
+    "planet_top_inset": 24.0,
+    "row_step": 10.0,
+    "glyph_to_deg_gap": 2.0,
+    "retro_gap": 1.0,
+    "house_right_inset": 4.0,
+    "house_bottom_inset": 5.0,
+    "font_glyph": 7.0,
+    "font_deg": 6.0,
+    "font_retro": 4.5,
+    "font_house": 6.5,
+    "color_house": "#7a5a3a"
+  },
+
+  "header": {
+    "_desc": "上部ヘッダ。台紙には『さん』『インド占星術 出生図』『（南インド式…）』が印刷済み。ここで足すのは氏名（さんの直前）と生年月日の行のみ。",
+    "name": { "mode": "center", "center_x": 178.75, "max_right": 224.0, "baseline_y": 59.0, "font": 13.0, "color": "#3a2a14" },
+    "birth": { "center_x": 178.75, "baseline_y": 122.0, "font": 6.8, "color": "#7a5a3a" }
+  },
+
+  "planet_style": {
+    "_desc": "表示記号と色（SVGに準拠）。記号は太字で描く。",
+    "As": { "sym": "As", "color": "#2e7d57" },
+    "Su": { "sym": "太", "color": "#e8862e" },
+    "Mo": { "sym": "月", "color": "#3a8fc4" },
+    "Me": { "sym": "水", "color": "#444444" },
+    "Ve": { "sym": "金", "color": "#b8841a" },
+    "Ma": { "sym": "火", "color": "#d94e3a" },
+    "Ju": { "sym": "木", "color": "#c07a10" },
+    "Sa": { "sym": "土", "color": "#7a5a3a" },
+    "Ra": { "sym": "Ra", "color": "#7a3aa8" },
+    "Ke": { "sym": "Ke", "color": "#9a7ac4" },
+    "Ur": { "sym": "Ur", "color": "#2a6a8a" },
+    "Ne": { "sym": "Ne", "color": "#3a5aa8" },
+    "Pl": { "sym": "Pl", "color": "#6a2a6a" }
+  },
+
+  "fonts": {
+    "regular": "fonts/NotoSerifJP-Regular.otf",
+    "bold": "fonts/NotoSerifJP-Bold.otf"
+  },
+
+  "reading": {
+    "_desc": "鑑定文ページ専用のキャリブレーション。render_reading.py が使う。飾り枠の本番台紙ができたら frame/title/header/divider/body の座標だけここで調整する（描画コードは触らない）。単位は PDF ポイント、原点は左上。",
+    "page": { "width": 595.28, "height": 841.89 },
+    "_page_note": "現状は専用台紙が無いので A4 を新規生成して簡易枠を描く。台紙PDFを用意したら template 引数で渡せば frame は描かず読み込んだページに刷り込む。",
+
+    "frame": {
+      "_desc": "簡易の飾り枠（外枠＋内枠の二重線）。本番枠ができたら template を渡してこの描画は使わない。",
+      "margin": 42.0,
+      "inner_gap": 6.0,
+      "line_width": 1.4,
+      "inner_line_width": 0.6,
+      "color": "#8a6a3a"
+    },
+
+    "title": {
+      "_desc": "ページタイトル（.md 先頭の『# 見出し』。無ければ default）。中央寄せ・太字。",
+      "center_x": 297.64, "baseline_y": 96.0, "font": 16.0, "color": "#3a2a14",
+      "default": "鑑定文"
+    },
+
+    "header": {
+      "_desc": "meta（氏名・生年月日時・出生地）。render_sheet.draw_header をそのまま流用するため name/birth の構造を合わせている。birth 行は『生年月日 時刻 / 出生地』。",
+      "name": { "mode": "center", "center_x": 297.64, "baseline_y": 124.0, "font": 12.5, "color": "#3a2a14" },
+      "birth": { "center_x": 297.64, "baseline_y": 142.0, "font": 8.5, "color": "#7a5a3a" }
+    },
+
+    "divider": {
+      "_desc": "meta と本文を仕切る細い横線。",
+      "x0": 90.0, "x1": 505.28, "y": 156.0, "width": 0.5, "color": "#b09a7a"
+    },
+
+    "body": {
+      "_desc": "本文（見出し→本文→余白→…）を流し込む矩形。ここに入りきるよう本文サイズを自動調整する。",
+      "x0": 70.0, "y0": 172.0, "x1": 525.28, "y1": 788.0
+    },
+
+    "flow": {
+      "_desc": "流し込みと自動フォント調整の設定。body_size から min_body_size まで size_step 刻みで下げて入る最大サイズを選ぶ。見出しは body × heading_scale で連動。gap は body_size に対する係数。",
+      "body_size": 11.0,
+      "min_body_size": 8.0,
+      "size_step": 0.5,
+      "heading_scale": 1.25,
+      "line_height": 1.55,
+      "head_gap_factor": 0.35,
+      "section_gap_factor": 1.0,
+      "color_heading": "#3a2a14",
+      "color_body": "#222222"
+    }
+  }
+}

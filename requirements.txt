@@ -1,0 +1,5 @@
+streamlit==1.50.0
+pyswisseph==2.10.3.2
+anthropic==0.116.0
+PyMuPDF==1.26.5
+fonttools==4.60.2
