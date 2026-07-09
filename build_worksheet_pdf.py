@@ -58,6 +58,32 @@ def _find_rsvg_convert():
     )
 
 
+_FONTS_DIR = os.path.join(_SHEET_DIR, "fonts")
+
+_FONTCONFIG_TEMPLATE = """<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "fonts.dtd">
+<fontconfig>
+  <dir>{fonts_dir}</dir>
+  <cachedir>/tmp/jyotish-fontconfig-cache</cachedir>
+  <include ignore_missing="yes">/etc/fonts/fonts.conf</include>
+  <include ignore_missing="yes">/opt/homebrew/etc/fonts/fonts.conf</include>
+  <include ignore_missing="yes">/usr/local/etc/fonts/fonts.conf</include>
+</fontconfig>
+"""
+
+
+def _write_fontconfig(tmp_dir):
+    """rsvg-convert専用のfontconfig設定を作る。同梱の sheet/fonts/NotoSerifJP-*.otf
+    （内部フォント名が generate_chart_auto.FONT と同じ "Noto Serif CJK JP"）を
+    OSに関係なく必ず見つけられるようにする（ローカルMacとStreamlit Cloudの両方で
+    見た目を統一するため。OS標準フォントに頼ると、Cloud側にNoto Serif CJK JP相当の
+    フォントが無くゴシック体で代替表示されてしまう＝2026-07-09にパイロット公開で発覚）。
+    """
+    conf_path = Path(tmp_dir) / "fonts.conf"
+    conf_path.write_text(_FONTCONFIG_TEMPLATE.format(fonts_dir=_FONTS_DIR), encoding="utf-8")
+    return str(conf_path)
+
+
 def _build_chart_pdf(data, name, tmp_dir, out_path):
     """画面表示と同じ新デザインのSVGを、そのままPDF化してファイルに保存する。
 
@@ -71,11 +97,14 @@ def _build_chart_pdf(data, name, tmp_dir, out_path):
     svg = build_svg(svg_data)
     svg_path = Path(tmp_dir) / f"{name}.svg"
     svg_path.write_text(svg, encoding="utf-8")
+    fontconfig_path = _write_fontconfig(tmp_dir)
+    env = {**os.environ, "FONTCONFIG_FILE": fontconfig_path}
     # -d/-p 72dpi 指定で、SVGのユーザー単位(px)とPDFのポイント(pt)を1:1にする
     # （旧fitz変換時のページサイズ=SVGのwidth/heightそのままpt、と揃えるため）。
     subprocess.run(
         [_find_rsvg_convert(), "-f", "pdf", "-d", "72", "-p", "72", "-o", str(out_path), str(svg_path)],
         check=True,
+        env=env,
     )
 
 
