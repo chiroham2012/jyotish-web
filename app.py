@@ -24,7 +24,7 @@ import re
 import traceback
 import streamlit as st
 import streamlit.components.v1 as components
-from compute_chart import compute_chart
+from compute_chart_isolated import compute_chart_safe  # ← 別プロセスで実行し、セグフォルト等がアプリ全体を巻き込まないようにする
 from generate_chart_auto import build_svg   # ← 既存の南インド式ジェネレータを流用
 from chart_bridge import chart_json_to_svg_data  # ← JSON→SVG用データの橋渡し（画面・PDF共通）
 from build_reading import build_reading     # ← 材料ボード→Claude API→鑑定文
@@ -191,16 +191,21 @@ submitted = st.button("鑑定チャートを作成", type="primary")
 
 if submitted:
     birth_dt = dt.datetime.combine(bdate, btime)
-    data = compute_chart(name, birth_dt, tz, lat, lon,
-                         city=city_name, country="Japan",
-                         include_outer=True)
-    # フォーム送信時に結果を保存。別ボタン（鑑定文を生成）で再実行されても結果が
-    # 消えないよう session_state に持たせる。新しく算出したら前の鑑定文はクリア。
-    st.session_state["data"] = data
-    st.session_state["name"] = name
-    st.session_state["key"] = _safe_key(name)
-    st.session_state["reading"] = None
-    st.session_state["worksheet_pdf"] = None
+    try:
+        with st.spinner("ホロスコープを計算しています…"):
+            data = compute_chart_safe(name, birth_dt, tz, lat, lon,
+                                      city=city_name, country="Japan",
+                                      include_outer=True)
+        # フォーム送信時に結果を保存。別ボタン（鑑定文を生成）で再実行されても結果が
+        # 消えないよう session_state に持たせる。新しく算出したら前の鑑定文はクリア。
+        st.session_state["data"] = data
+        st.session_state["name"] = name
+        st.session_state["key"] = _safe_key(name)
+        st.session_state["reading"] = None
+        st.session_state["worksheet_pdf"] = None
+    except Exception as e:
+        _show_error("ホロスコープの計算でエラーが発生しました。入力内容（特に緯度・経度・時差）をご確認のうえ、"
+                     "時間をおいて再度お試しください。", e)
 
 data = st.session_state.get("data")
 if data:
