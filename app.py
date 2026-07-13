@@ -23,7 +23,6 @@ import os
 import re
 import traceback
 import streamlit as st
-import streamlit.components.v1 as components
 from compute_chart_isolated import compute_chart_safe  # ← 別プロセスで実行し、セグフォルト等がアプリ全体を巻き込まないようにする
 from generate_chart_auto import build_svg   # ← 既存の南インド式ジェネレータを流用
 from chart_bridge import chart_json_to_svg_data  # ← JSON→SVG用データの橋渡し（画面・PDF共通）
@@ -150,9 +149,12 @@ def render_horoscope_svg(data, display_name):
         'width="100%" style="height:auto; max-width:760px; display:block; margin:0 auto;"',
         1,
     )
-    components.html(
+    # components.html（iframe埋め込み）は、再実行のたびにiframeを作り直す都合上、
+    # ブラウザ側で "NotFoundError: removeChild" というクラッシュを起こすことがあった。
+    # st.markdown なら通常のDOM更新で済むため、そちらに変更した。
+    st.markdown(
         f'<div style="display:flex; justify-content:center;">{svg_responsive}</div>',
-        height=1000, scrolling=False,
+        unsafe_allow_html=True,
     )
     return svg  # ダウンロード用に元の SVG（固定サイズ）を返す
 
