@@ -152,7 +152,9 @@ JP_SYM = {"Su":"太","Mo":"月","Me":"水","Ve":"金","Ma":"火","Ju":"木","Sa"
           "Ur":"天","Ne":"海","Pl":"冥"}
 
 def draw_planets(planets):
-    """各セルの惑星を『記号／度数』の2列で揃え、セル中央にブロック配置する。"""
+    """各セルの惑星を『記号／度数』の2列で揃え、セル中央にブロック配置する。
+    1つのマスに惑星が集中して(目安5個以上)既定の行高さでは収まりきらない場合は、
+    行の高さと文字サイズを人数に応じて縮め、マスからはみ出さないようにする。"""
     cell_planets = {}
     for code, sign_eng, deg in planets:
         if sign_eng not in SIGN_POS:
@@ -161,10 +163,10 @@ def draw_planets(planets):
         cell_planets.setdefault(pos, []).append((code, deg))
 
     out = []
-    ROW_H   = 30          # 1惑星あたりの行の高さ
-    SYM_COL = 26          # 記号の列幅（度数の左端がここで揃う）
-    DEG_W   = 44          # 度数(DD:MM)の想定幅
-    BLOCK_W = SYM_COL + DEG_W
+    ROW_H_MAX = 30         # 1惑星あたりの行の高さ（余裕がある場合の上限）
+    SYM_COL   = 30         # 記号の列幅（度数の左端がここで揃う。逆行Rマーク分の余白を含む）
+    DEG_W     = 44         # 度数(DD:MM)の想定幅
+    BLOCK_W   = SYM_COL + DEG_W
 
     for (col, row), items in cell_planets.items():
         x, y = cell_xy(col, row)
@@ -172,26 +174,35 @@ def draw_planets(planets):
         # 星座名(上)とハウス番号(下)を避けた、惑星を置ける縦の範囲
         area_top = y + 42
         area_bot = y + CELL - 26
-        block_h  = n * ROW_H
-        first_base = area_top + max((area_bot - area_top - block_h) / 2, 0) + 21
+        avail_h  = area_bot - area_top
+        # 行の高さは「既定の30px」と「全員がちょうど収まる高さ」の小さい方
+        row_h = min(ROW_H_MAX, avail_h / n) if n else ROW_H_MAX
+        scale = row_h / ROW_H_MAX
+        sym_size = max(19 * scale, 11)
+        deg_size = max(16 * scale, 9)
+        r_size   = max(13 * scale, 9)
+        block_h  = n * row_h
+        first_base = area_top + max((avail_h - block_h) / 2, 0) + row_h * 0.7
         block_x = x + (CELL - BLOCK_W) / 2
         sym_cx  = block_x + SYM_COL / 2 - 2   # 記号は自分の列の中央に
         deg_x   = block_x + SYM_COL           # 度数は左端を揃える
 
         for i, (code, deg) in enumerate(items):
-            base = first_base + i * ROW_H
+            base = first_base + i * row_h
             color = planet_color(code)
             is_retro  = code.endswith("R")
             base_code = code[:-1] if is_retro else code
             sym = JP_SYM.get(base_code, base_code)
             out.append(f'<text x="{sym_cx:.1f}" y="{base:.1f}" font-family="{FONT}" '
-                       f'font-size="19" font-weight="bold" fill="{color}" '
+                       f'font-size="{sym_size:.1f}" font-weight="bold" fill="{color}" '
                        f'text-anchor="middle">{sym}</text>')
             if is_retro:
-                out.append(f'<text x="{sym_cx+13:.1f}" y="{base-9:.1f}" font-family="{FONT}" '
-                           f'font-size="10" fill="{color}">R</text>')
+                # 記号の右肩に小さく superscript として乗せる（度数の列とは重ならない位置）
+                out.append(f'<text x="{sym_cx+6*scale:.1f}" y="{base-12*scale:.1f}" '
+                           f'font-family="{FONT}" font-size="{r_size:.1f}" font-weight="bold" '
+                           f'fill="{color}">R</text>')
             out.append(f'<text x="{deg_x:.1f}" y="{base:.1f}" font-family="{FONT}" '
-                       f'font-size="16" fill="{color}">{deg}</text>')
+                       f'font-size="{deg_size:.1f}" fill="{color}">{deg}</text>')
     return "\n".join(out)
 
 def draw_legend_below():
