@@ -57,6 +57,23 @@ def _show_error(user_message: str, exc: Exception) -> None:
     traceback.print_exc()
 
 
+def _html_table(rows: list) -> str:
+    """dictのリストを簡易HTMLテーブルにする（st.dataframeはpyarrow経由のため使わない。
+    公開環境でstreamlitサーバー全体を巻き込むセグフォルトが起きたことがあるため回避）。"""
+    if not rows:
+        return "<p>(データなし)</p>"
+    headers = list(rows[0].keys())
+    thead = "".join(f"<th style='text-align:left; padding:4px 10px;'>{h}</th>" for h in headers)
+    body_rows = []
+    for row in rows:
+        cells = "".join(f"<td style='padding:4px 10px;'>{row.get(h, '')}</td>" for h in headers)
+        body_rows.append(f"<tr>{cells}</tr>")
+    return (
+        "<div style='overflow-x:auto;'><table style='border-collapse:collapse; width:100%;'>"
+        f"<thead><tr>{thead}</tr></thead><tbody>{''.join(body_rows)}</tbody></table></div>"
+    )
+
+
 def _check_password():
     """APP_PASSWORD が secrets に設定されていれば、簡易パスワードゲートを表示する。
     設定されていなければ（＝ローカル動作時）認証をスキップして常に通す。
@@ -239,10 +256,10 @@ if data:
             rows.append({"惑星": p["name_en"], "サイン": p["sign"], "度数": p["degree"],
                          "ハウス": p["house"], "逆行": "R" if p["retrograde"] else "",
                          "ナクシャトラ": p.get("nakshatra", "")})
-        st.dataframe(rows, hide_index=True, use_container_width=True)
+        st.markdown(_html_table(rows), unsafe_allow_html=True)
 
         st.subheader("ヴィムショッタリ・ダシャー（直近）")
-        st.dataframe(data["dasha"]["periods"][:8], hide_index=True, use_container_width=True)
+        st.markdown(_html_table(data["dasha"]["periods"][:8]), unsafe_allow_html=True)
 
         st.subheader("チャラ・カラカ")
         st.write({k: v for k, v in data["karakas"].items() if not k.startswith("_") and k != "scheme"})
