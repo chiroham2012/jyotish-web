@@ -154,7 +154,7 @@ with c1:
                           max_value=dt.date(2100, 12, 31))
 with c2:
     btime = st.time_input("出生時刻", dt.time(12, 0), step=60)
-st.caption("正確な時刻がわからない場合は 12:00 のままで構いません。")
+st.caption("正確な時刻がわからない場合は 12:00 のままで鑑定します。")
 
 city = st.selectbox(
     "出生地",
