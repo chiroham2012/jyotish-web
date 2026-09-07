@@ -26,8 +26,8 @@ import streamlit as st
 from compute_chart_isolated import compute_chart_safe  # ← 別プロセスで実行し、セグフォルト等がアプリ全体を巻き込まないようにする
 from generate_chart_auto import build_svg   # ← 既存の南インド式ジェネレータを流用
 from chart_bridge import chart_json_to_svg_data  # ← JSON→SVG用データの橋渡し（画面・PDF共通）
-from build_reading import build_reading     # ← 材料ボード→Claude API→鑑定文
-from build_worksheet_pdf import build_worksheet_pdf  # ← 鑑定文+JSON→2枚綴じPDF（同じSVGを再利用）
+from build_reading import build_reading, foreign_script_in  # ← 材料ボード→Claude API→鑑定文／異物混入の検査
+from build_worksheet_pdf import build_worksheet_pdf, reading_fit_report  # ← 鑑定文+JSON→2枚綴じPDF（同じSVGを再利用）／収まるかの事前確認
 from cities_jp import CITIES_JP            # ← 全国の市区町村＋緯度経度（自動生成。tools/build_cities.py で作り直せる）
 
 # set_page_config は「スクリプト内で最初に呼ぶstreamlitコマンド」である必要があるため、
@@ -199,6 +199,8 @@ if submitted:
         st.session_state["key"] = _safe_key(name)
         st.session_state["reading"] = None
         st.session_state["worksheet_pdf"] = None
+        st.session_state["worksheet_overflow"] = None
+        st.session_state["reading_stray"] = None
     except Exception as e:
         _show_error("ホロスコープの計算でエラーが発生しました。入力内容（特に緯度・経度・時差）をご確認のうえ、"
                      "時間をおいて再度お試しください。", e)
@@ -262,8 +264,13 @@ if data:
         else:
             try:
                 with st.spinner("鑑定文を生成しています…（十数秒かかることがあります）"):
-                    st.session_state["reading"] = build_reading(data, api_key=api_key)
-                    st.session_state["worksheet_pdf"] = None  # 鑑定文が変われば古いPDFは無効
+                    reading_text = build_reading(data, api_key=api_key)
+                    st.session_state["reading"] = reading_text
+                    # build_reading 側で一度作り直しても異物が残った場合の最後の砦。
+                    st.session_state["reading_stray"] = foreign_script_in(reading_text)
+                    # 鑑定文が変われば古いPDFも、その時の「入りきらない」警告も無効になる
+                    st.session_state["worksheet_pdf"] = None
+                    st.session_state["worksheet_overflow"] = None
             except Exception as e:
                 _show_error("鑑定文の生成でエラーが発生しました。時間をおいて再度お試しください。", e)
 
@@ -281,12 +288,34 @@ if data:
         st.caption("チャート図と鑑定文をまとめた2ページのPDFを作成します。")
         if st.button("PDFワークシートを作る", type="primary"):
             try:
+                # 組版は枠に入りきらない分を黙って捨てるため、作る前に収まるか確かめる。
+                # 収まらないときも作成自体は止めない（何も手元に残らないと困るため）が、
+                # 欠けることを画面ではっきり知らせる。
+                overflow_msg = reading_fit_report(st.session_state["reading"])
                 with st.spinner("PDFワークシートを作っています…"):
                     st.session_state["worksheet_pdf"] = build_worksheet_pdf(
                         data, st.session_state["reading"], key
                     )
+                st.session_state["worksheet_overflow"] = overflow_msg
             except Exception as e:
                 _show_error("PDFの作成でエラーが発生しました。時間をおいて再度お試しください。", e)
+
+        if st.session_state.get("reading_stray"):
+            st.warning(
+                "鑑定文に日本語以外の文字（"
+                + "、".join(st.session_state["reading_stray"])
+                + "）が紛れ込んでいます。「鑑定文を生成」をもう一度押して"
+                  "作り直してから、PDFにしてください。",
+                icon="⚠️",
+            )
+
+        if st.session_state.get("worksheet_overflow"):
+            st.warning(
+                st.session_state["worksheet_overflow"]
+                + "\n\n「③ 鑑定文」の「鑑定文を生成」をもう一度押すと、"
+                  "別の文章が作られます。短めの文章になればすべて収まります。",
+                icon="⚠️",
+            )
 
         if st.session_state.get("worksheet_pdf"):
             st.download_button(

@@ -108,6 +108,53 @@ def _build_chart_pdf(data, name, tmp_dir, out_path):
     )
 
 
+def reading_fit_report(reading_md):
+    """鑑定文が2ページ目の本文枠に収まるかを、実際の組版ロジックで事前に確かめる。
+
+    収まるなら None、収まらないなら利用者向けの説明文（str）を返す。
+
+    render_reading.draw_flow は枠に入りきらない分を黙って捨てる作りで、警告も
+    サーバーログに print されるだけで画面には出ない。そのため2026-09-07まで
+    「鑑定文の末尾（ひとことメッセージ）がまるごと欠けたPDF」が、誰にも
+    気づかれないまま作られていた。同じことが二度と起きないよう、PDFを作る前に
+    ここで検知して、呼び出し側（app.py）が画面に警告を出せるようにしている。
+    """
+    import fitz
+    import render_reading as rr
+
+    calib = rr.load_json(str(make_worksheet_set.CALIB))
+    cr = calib["reading"]
+    flow = cr["flow"]
+    rect = fitz.Rect(cr["body"]["x0"], cr["body"]["y0"], cr["body"]["x1"], cr["body"]["y1"])
+    reg_font = str(rr.ROOT / calib["fonts"]["regular"])
+    bold_font = str(rr.ROOT / calib["fonts"]["bold"])
+
+    # parse_md はファイルパスを取る作りなので、いったん一時ファイルへ書き出す
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".md", delete=False, encoding="utf-8"
+        ) as tf:
+            tf.write(reading_md)
+            tmp_path = tf.name
+        _, sections = rr.parse_md(tmp_path)
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+    blocks = rr.build_blocks(sections)
+    body_size, fits, overflow = rr.choose_body_size(reg_font, bold_font, blocks, rect, flow)
+    if fits:
+        return None
+
+    # 和文は概ね「1文字＝フォントサイズ幅」なので、溢れた高さから文字数を概算する
+    line_h = body_size * flow["line_height"]
+    chars_per_line = max(1, int(rect.width / body_size))
+    over_chars = max(1, int(overflow / line_h * chars_per_line))
+    return (f"鑑定文が長いため、末尾のおよそ{over_chars}文字がPDFに入りきりません"
+            f"（このまま作ると、最後の見出しの文章が欠けた状態になります）。")
+
+
 def build_worksheet_pdf(data, reading_md, name):
     """data(dict) と reading_md(str) から2枚綴じワークシートPDFを生成し、
     そのバイト列を返す（チャート1ページ目＝新デザインSVG／鑑定文2ページ目・A4）。

@@ -19,6 +19,7 @@ APIキーは環境変数 ANTHROPIC_API_KEY か、呼び出し側から api_key= 
 """
 import json
 import os
+import re
 import sys
 import tempfile
 
@@ -123,7 +124,38 @@ _SYSTEM_FRAMING = """\
       最後に「もちろんこれは一例で、活かし方はいろいろあります」の一文を添える。）
   ## ひとことメッセージ
   （締めの一言）
+
+分量（厳守）:
+  全体で 1,300〜1,500 字程度に収めること（見出しを含む）。この鑑定文はそのまま
+  配布用A4ワークシートの2ページ目に流し込まれるため、これを超えると末尾が
+  印刷されずに欠落する（2026-09-07、実際に「ひとことメッセージ」がまるごと
+  消えているのを発見して分量指示を追加した）。
+  上の7つの見出しはすべて残したうえで、各節をおおむね150〜250字にまとめる。
+  節を削ったり材料を落としたりするのではなく、一文一文の言い回しを締めて短くすること。
 """
+
+
+# 鑑定文に混ざってはいけない文字体系（ギリシャ・キリル・ヘブライ・アラビア・
+# デーヴァナーガリー・タイ・ハングル）。2026-09-07、生成した鑑定文5本のうち1本に
+# ロシア語の単語（"людям"）が紛れ込んでいるのを発見したため検査を入れた。
+# このアプリは一般利用者が使い、鑑定者の手直しが入らないまま配布物になるので、
+# 明らかな異物はここで弾いて作り直す。
+_FOREIGN_SCRIPT = re.compile(
+    "["
+    "\u0370-\u03FF"   # ギリシャ
+    "\u0400-\u052F"   # キリル
+    "\u0590-\u05FF"   # ヘブライ
+    "\u0600-\u06FF"   # アラビア
+    "\u0900-\u097F"   # デーヴァナーガリー
+    "\u0E00-\u0E7F"   # タイ
+    "\uAC00-\uD7AF"   # ハングル
+    "]+"
+)
+
+
+def foreign_script_in(text):
+    """鑑定文に日本語以外の文字体系が紛れていれば、その断片のリストを返す。"""
+    return _FOREIGN_SCRIPT.findall(text or "")
 
 
 def build_reading(data, api_key=None, effort=None):
@@ -131,6 +163,8 @@ def build_reading(data, api_key=None, effort=None):
 
     api_key を渡さない場合は環境変数 ANTHROPIC_API_KEY 等から自動解決する。
     effort を渡すとその回だけ考える量を変えられる（省略時は EFFORT）。
+
+    出力に日本語以外の文字体系が紛れた場合は一度だけ生成し直す（foreign_script_in 参照）。
     """
     import anthropic  # 遅延 import（未インストールでも import 時にこけないように）
 
@@ -146,26 +180,37 @@ def build_reading(data, api_key=None, effort=None):
 
     client = anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
 
-    # system は安定プレフィックス → cache_control で繰り返し実行のコストを抑える。
-    with client.messages.stream(
-        model=MODEL,
-        max_tokens=4000,
-        thinking={"type": "adaptive"},
-        output_config={"effort": effort or EFFORT},
-        system=[
-            {
-                "type": "text",
-                "text": system_text,
-                "cache_control": {"type": "ephemeral"},
-            }
-        ],
-        messages=[{"role": "user", "content": user_text}],
-    ) as stream:
-        message = stream.get_final_message()
+    def _generate():
+        # system は安定プレフィックス → cache_control で繰り返し実行のコストを抑える。
+        with client.messages.stream(
+            model=MODEL,
+            max_tokens=4000,
+            thinking={"type": "adaptive"},
+            output_config={"effort": effort or EFFORT},
+            system=[
+                {
+                    "type": "text",
+                    "text": system_text,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+            messages=[{"role": "user", "content": user_text}],
+        ) as stream:
+            message = stream.get_final_message()
+        return "".join(
+            block.text for block in message.content if block.type == "text"
+        ).strip()
 
-    reading = "".join(
-        block.text for block in message.content if block.type == "text"
-    ).strip()
+    # まれに日本語以外の文字が紛れることがある（実測で5本に1本）。配布物に
+    # そのまま載ると事故なので、見つけたら一度だけ作り直す。2回目も駄目なら
+    # そのまま返し、呼び出し側（app.py）が画面で警告する。
+    reading = _generate()
+    stray = foreign_script_in(reading)
+    if stray:
+        print(f"[warn] 鑑定文に日本語以外の文字 {stray} が混入したため生成し直します。")
+        reading = _generate()
+        if foreign_script_in(reading):
+            print("[warn] 生成し直しても混入が残りました。呼び出し側で警告してください。")
     return reading
 
 
