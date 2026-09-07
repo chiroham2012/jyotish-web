@@ -38,7 +38,16 @@ _REF_DOCS = [
     "文体・表現の癖メモ_仕事.md",
 ]
 
-MODEL = "claude-opus-4-8"
+MODEL = "claude-opus-5"
+
+# 考える量（thinking の深さ）。low / medium / high / xhigh / max が指定できる。
+# 2026-09-07に実測して "high" のままにすると決めた。low/medium/high の3水準で
+# 鑑定文を生成して比べたところ、費用は1回$0.154〜$0.170（差は約2円）で
+# ほぼ変わらず、品質もどれも良好だった。このアプリの費用の約6割は毎回送る
+# 固定プロンプト（象意辞典など15,180トークン）が占めていて、考える量は
+# 費用にほとんど効かない。したがってeffortはコスト調整には使えない。
+# 下げる意味がないので、品質がいちばん安定する既定値のままにしておく。
+EFFORT = "high"
 
 
 def build_board_from_data(data: dict):
@@ -117,10 +126,11 @@ _SYSTEM_FRAMING = """\
 """
 
 
-def build_reading(data, api_key=None):
+def build_reading(data, api_key=None, effort=None):
     """計算JSON(data) から完成鑑定文（markdown 文字列）を生成して返す。
 
     api_key を渡さない場合は環境変数 ANTHROPIC_API_KEY 等から自動解決する。
+    effort を渡すとその回だけ考える量を変えられる（省略時は EFFORT）。
     """
     import anthropic  # 遅延 import（未インストールでも import 時にこけないように）
 
@@ -141,6 +151,7 @@ def build_reading(data, api_key=None):
         model=MODEL,
         max_tokens=4000,
         thinking={"type": "adaptive"},
+        output_config={"effort": effort or EFFORT},
         system=[
             {
                 "type": "text",
