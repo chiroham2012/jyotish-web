@@ -69,3 +69,30 @@ APP_PASSWORD = "好きな合言葉"
 
 どちらも公開用に複製（vendoring）したものです。元フォルダ側は今までどおり
 仕事鑑定スキルの手元運用に使い続けられます。
+
+- `cities_jp.py` … 出生地の選択肢（全国の市区町村 約1,900件＋緯度経度）。
+  自動生成ファイルなので手で編集しないでください。
+
+## 出生地データの更新
+
+`cities_jp.py` は GeoNames（https://www.geonames.org/ ／CC BY 4.0）の日本データから
+自動生成しています。市町村合併などで作り直したくなったときだけ、次の手順で更新します。
+ふだんの運用では触る必要はありません。
+
+```
+cd <作業用の空フォルダ>
+curl -O http://download.geonames.org/export/dump/JP.zip
+curl -O http://download.geonames.org/export/dump/alternatenames/JP.zip   # ← 別名（言語タグ付き）
+mkdir geo alt
+unzip -o JP.zip -d geo
+unzip -o alternatenames/JP.zip -d alt        # ※2つのzipは中身のファイル名が同じなので必ず別フォルダへ
+python3 <jyotish_web>/tools/build_cities.py  # → cities_jp.py が出来る
+```
+
+出来た `cities_jp.py` を `jyotish_web/` と `jyotish_web_deploy/` の両方に置き換えます。
+生成スクリプトは件数と47都道府県が揃っているかを自己チェックし、揃わなければ
+途中で止まる（古いファイルを壊さない）ようになっています。
+
+**注意：** GeoNamesの別名欄には中国語・韓国語の表記も混ざっています。必ず言語タグ
+`ja` の付いた別名だけを使ってください（タグを見ないで拾うと「東京都」ではなく
+簡体字の「东京都」を掴みます。実際にこれで一度失敗しました）。
