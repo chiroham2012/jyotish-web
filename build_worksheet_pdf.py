@@ -5,7 +5,7 @@ build_worksheet_pdf.py — 鑑定文(markdown文字列) ＋ 計算JSON から、
 2枚綴じワークシートPDF（1p目チャート／2p目鑑定文・A4）のバイト列を作る。
 
 チャート図（1ページ目）は、画面表示（app.py）とまったく同じ
-generate_chart_auto.build_svg() の出力をそのままPDF化する（chart_bridge.py で
+generate_chart_auto の部品一覧（build_primitives）から描く（chart_bridge.py で
 橋渡し）。こうすることで「画面とPDFでチャート図のデザインが食い違う」ことが
 起きなくなる（2026-07-08、旧テンプレート render_sheet.py 経由だと画面側の
 デザイン改善が反映されない食い違いが実際に発生し、これに切り替えて解消した）。
@@ -24,14 +24,19 @@ calibration.json / fonts/）は、本番の02_jyotish_sheetフォルダから公
     ・生成物はすべて一時フォルダに書き、読み取り後に削除する
       （sheet/output/ 相当の場所には何も残さない。保存先はStreamlitの
         ダウンロードボタン経由で利用者自身が選べる）。
+    ・OSに別途インストールが要る外部コマンド（rsvg-convert / ghostscript）には
+      頼らない。Streamlit Cloud の土台OSのサポート終了で apt が使えなくなり、
+      それらを入れられなくなったため（2026-09-08）。SVG→PDF変換もフォントの
+      軽量化も、pip で入る範囲（PyMuPDF・fontTools）だけで完結させる。
 """
 import json
 import os
 import shutil
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+import fitz  # PyMuPDF
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _SHEET_DIR = os.path.join(_HERE, "sheet")  # 公開用に同梱(vendoring)済み（元は ../02_jyotish_sheet/）
@@ -39,73 +44,184 @@ if _SHEET_DIR not in sys.path:
     sys.path.insert(0, _SHEET_DIR)
 
 import make_worksheet_set  # noqa: E402（sys.path 追加後に import。bind_a4/CALIB/build_reading を使う）
+import render_sheet  # noqa: E402（同梱フォントのパス解決と hex2rgb を借りる）
 
-from generate_chart_auto import build_svg  # ← 画面表示と同じチャートSVGジェネレータ
-from chart_bridge import chart_json_to_svg_data  # ← JSON→SVG用データの橋渡し（app.pyと共通）
-
-
-_RSVG_CANDIDATES = ["rsvg-convert", "/opt/homebrew/bin/rsvg-convert", "/usr/local/bin/rsvg-convert"]
+import generate_chart_auto as gca  # ← 画面表示と同じチャート部品ジェネレータ
+from chart_bridge import chart_json_to_svg_data  # ← JSON→描画用データの橋渡し（app.pyと共通）
 
 
-def _find_rsvg_convert():
-    """rsvg-convert の実行ファイルを探す。見つからなければ分かりやすいエラーにする。"""
-    for candidate in _RSVG_CANDIDATES:
-        path = shutil.which(candidate) or (candidate if os.path.exists(candidate) else None)
-        if path:
-            return path
-    raise RuntimeError(
-        "rsvg-convert が見つかりません。ターミナルで `brew install librsvg` を実行してください。"
-    )
+def _font_paths():
+    """同梱の NotoSerifJP（明朝）の実ファイルパスを (通常, 太字) で返す。"""
+    calib = render_sheet.load_json(str(make_worksheet_set.CALIB))
+    return (str(render_sheet.ROOT / calib["fonts"]["regular"]),
+            str(render_sheet.ROOT / calib["fonts"]["bold"]))
 
 
-_FONTS_DIR = os.path.join(_SHEET_DIR, "fonts")
+# ---------- フォントの絞り込み ----------
+# NotoSerifJP は日本語の全文字を持つため1書体で約25MBあり、そのまま埋め込むと
+# 2ページで約80MBのPDFになる。以前は ghostscript が「使った文字だけ」に絞って
+# くれていたが、Streamlit Cloud の土台OS（Debian bullseye）のサポート終了で
+# OS側にghostscriptを入れられなくなった（2026-09-08）。そこでPythonだけで
+# 同じことをする。PyMuPDF内蔵の subset_fonts() はこのOTFを扱えず
+# （"Reserved charstring byte" で失敗）、fallback=True 側にも不具合があるため使わない。
 
-_FONTCONFIG_TEMPLATE = """<?xml version="1.0"?>
-<!DOCTYPE fontconfig SYSTEM "fonts.dtd">
-<fontconfig>
-  <dir>{fonts_dir}</dir>
-  <cachedir>/tmp/jyotish-fontconfig-cache</cachedir>
-  <include ignore_missing="yes">/etc/fonts/fonts.conf</include>
-  <include ignore_missing="yes">/opt/homebrew/etc/fonts/fonts.conf</include>
-  <include ignore_missing="yes">/usr/local/etc/fonts/fonts.conf</include>
-</fontconfig>
-"""
+def _collect_strings(obj, out):
+    """入れ子のdict/listから文字列だけを拾う（チャートJSONの取りこぼし防止）。"""
+    if isinstance(obj, str):
+        out.append(obj)
+    elif isinstance(obj, dict):
+        for v in obj.values():
+            _collect_strings(v, out)
+    elif isinstance(obj, list):
+        for v in obj:
+            _collect_strings(v, out)
 
 
-def _write_fontconfig(tmp_dir):
-    """rsvg-convert専用のfontconfig設定を作る。同梱の sheet/fonts/NotoSerifJP-*.otf
-    （内部フォント名が generate_chart_auto.FONT と同じ "Noto Serif CJK JP"）を
-    OSに関係なく必ず見つけられるようにする（ローカルMacとStreamlit Cloudの両方で
-    見た目を統一するため。OS標準フォントに頼ると、Cloud側にNoto Serif CJK JP相当の
-    フォントが無くゴシック体で代替表示されてしまう＝2026-07-09にパイロット公開で発覚）。
+def _used_characters(data, reading_md, primitives):
+    """PDFに現れうる文字を集める。多めに入れても数KBしか増えないので、
+    取りこぼし（＝その字だけ印字されない事故）を防ぐ側に寄せる。"""
+    parts = [reading_md, "".join(chr(c) for c in range(0x20, 0x7F))]
+    parts += [p["s"] for p in primitives if p["t"] == "text"]
+    _collect_strings(data.get("meta", {}), parts)
+    calib = render_sheet.load_json(str(make_worksheet_set.CALIB))
+    _collect_strings(calib.get("reading", {}).get("title", {}), parts)
+    return set("".join(parts))
+
+
+def _subset_font(src_path, chars, dst_path):
+    import io
+    from fontTools.subset import Options, Subsetter
+    from fontTools.ttLib import TTFont
+
+    font = TTFont(src_path, lazy=True)
+    options = Options()
+    # 合字・カーニング・縦書き用の表は、PyMuPDF の文字描画が参照しないので落とす
+    # （絞り込みが約2倍速くなり、フォントも小さくなる。字幅は hmtx が持つので不変）。
+    options.drop_tables += ["DSIG", "GSUB", "GPOS", "GDEF", "BASE",
+                            "vhea", "vmtx", "VORG"]
+    # retain_gids は必須。これを外すと文字番号が振り直され、MuPDFが日本語の字形を
+    # 見つけられずPDF上で日本語だけ真っ白に消える（英数字は出るので気づきにくい）。
+    # 番号を保つとフォントファイル自体は約770KBになるが、中身は空の字形ばかりなので
+    # PDFに圧縮して入れると150KB程度に収まる。
+    options.retain_gids = True
+    subsetter = Subsetter(options=options)
+    subsetter.populate(text="".join(sorted(chars)))
+    subsetter.subset(font)
+    buf = io.BytesIO()
+    font.save(buf)
+    font.close()
+    Path(dst_path).write_bytes(buf.getvalue())
+
+
+def _make_subset_fonts(chars, tmp_dir):
+    """使う文字だけに絞ったフォントを一時フォルダに作り、(通常, 太字) のパスを返す。"""
+    reg_src, bold_src = _font_paths()
+    reg_dst = Path(tmp_dir) / "subset-regular.otf"
+    bold_dst = Path(tmp_dir) / "subset-bold.otf"
+    _subset_font(reg_src, chars, reg_dst)
+    _subset_font(bold_src, chars, bold_dst)
+    return str(reg_dst), str(bold_dst)
+
+
+def _calib_with_fonts(reg_font, bold_font, tmp_dir):
+    """フォントだけ差し替えた calibration.json を一時フォルダに作り、そのパスを返す。
+
+    render_reading は calibration.json の fonts を `ROOT / 値` で解決するが、
+    値が絶対パスならそのまま採用される（pathlib の仕様）。この抜け道を使うことで、
+    手元版から複製している sheet/ 側のファイルを一切変更せずに、
+    絞り込み済みフォントを2ページ目にも使わせる。
     """
-    conf_path = Path(tmp_dir) / "fonts.conf"
-    conf_path.write_text(_FONTCONFIG_TEMPLATE.format(fonts_dir=_FONTS_DIR), encoding="utf-8")
-    return str(conf_path)
+    calib = render_sheet.load_json(str(make_worksheet_set.CALIB))
+    calib["fonts"] = {"regular": reg_font, "bold": bold_font}
+    path = Path(tmp_dir) / "calibration.json"
+    path.write_text(json.dumps(calib, ensure_ascii=False), encoding="utf-8")
+    return str(path)
 
 
-def _build_chart_pdf(data, name, tmp_dir, out_path):
-    """画面表示と同じ新デザインのSVGを、そのままPDF化してファイルに保存する。
+def _draw_text(page, fonts, p):
+    """部品1つぶんの文字を描く。SVGの text-anchor と letter-spacing を再現する。"""
+    font = fonts[p["bold"]]
+    size, spacing, s = p["size"], p["spacing"], p["s"]
+    if spacing:
+        widths = [font.text_length(ch, fontsize=size) for ch in s]
+        total = sum(widths) + spacing * len(s)
+    else:
+        widths = None
+        total = font.text_length(s, fontsize=size)
 
-    SVG→PDF変換は rsvg-convert（librsvg）を使う。PyMuPDF(fitz)の内蔵SVGレンダラーは
-    font-family指定を無視して常に内蔵CJKフォールバックフォントを使い、そのフォントが
-    長音記号「ー」のグリフを落とす不具合があるため（2026-07-09 に実機で確認・再現済み。
-    例：「ラーフ」→「ラフ」）、フォント名の変更では直らず変換エンジン自体を差し替えた。
+    x = p["x"]
+    if p["anchor"] == "middle":
+        x -= total / 2
+    elif p["anchor"] == "end":
+        x -= total
+
+    fontname = "njpb" if p["bold"] else "njp"
+    color = render_sheet.hex2rgb(p["fill"])
+    if spacing:
+        # SVGの字間は各文字の前後に半分ずつ入る（librsvgが使うPangoの流儀）
+        cur = x + spacing / 2
+        for ch, w in zip(s, widths):
+            page.insert_text((cur, p["y"]), ch, fontname=fontname, fontsize=size, color=color)
+            cur += w + spacing
+    else:
+        page.insert_text((x, p["y"]), s, fontname=fontname, fontsize=size, color=color)
+
+
+def _draw_prim(page, fonts, p):
+    t = p["t"]
+    if t == "text":
+        _draw_text(page, fonts, p)
+    elif t == "rect":
+        rect = fitz.Rect(p["x"], p["y"], p["x"] + p["w"], p["y"] + p["h"])
+        # PyMuPDF の radius は短辺に対する比率で指定する
+        radius = p["rx"] / min(p["w"], p["h"]) if p["rx"] else None
+        page.draw_rect(
+            rect,
+            color=render_sheet.hex2rgb(p["stroke"]) if p["stroke"] else None,
+            fill=render_sheet.hex2rgb(p["fill"]) if p["fill"] else None,
+            width=p["width"] if p["stroke"] else 0,
+            radius=radius,
+        )
+    elif t == "line":
+        page.draw_line((p["x1"], p["y1"]), (p["x2"], p["y2"]),
+                       color=render_sheet.hex2rgb(p["stroke"]), width=p["width"])
+    elif t == "polygon":
+        pts = p["points"]
+        page.draw_polyline([*pts, pts[0]],
+                           color=render_sheet.hex2rgb(p["stroke"]), width=p["width"])
+    elif t == "circle":
+        page.draw_circle((p["cx"], p["cy"]), p["r"],
+                         color=None, fill=render_sheet.hex2rgb(p["fill"]),
+                         fill_opacity=p["opacity"])
+    else:
+        raise ValueError(f"未知の描画部品: {t}")
+
+
+def _build_chart_pdf(primitives, fonts_paths, out_path):
+    """画面表示とまったく同じ部品一覧から、チャート図のPDFを直接描いて保存する。
+
+    以前は SVG を書き出して外部コマンド rsvg-convert でPDF化していたが、
+    Streamlit Cloud の土台OS（Debian bullseye）のサポート終了で apt が使えなくなり、
+    OS側にlibrsvgを入れられなくなった（2026-09-08）。そこで中間のSVGをやめ、
+    PyMuPDF の描画機能で同じ絵を直接描くことにして、外部コマンド依存をなくした。
+
+    ※ PyMuPDF の「SVG読み取り機能」には戻さないこと。font-family指定を無視して
+      内蔵CJKフォールバックフォントを使い、長音記号「ー」のグリフを落とす
+      （2026-07-09に実機で確認。例：「ラーフ」→「ラフ」）。ここで使っているのは
+      フォントを明示して文字を直接描く機能で、それとは別物。
     """
-    display_name = name.replace("_", " ")
-    svg_data = chart_json_to_svg_data(data, display_name)
-    svg = build_svg(svg_data)
-    svg_path = Path(tmp_dir) / f"{name}.svg"
-    svg_path.write_text(svg, encoding="utf-8")
-    fontconfig_path = _write_fontconfig(tmp_dir)
-    env = {**os.environ, "FONTCONFIG_FILE": fontconfig_path}
-    # -d/-p 72dpi 指定で、SVGのユーザー単位(px)とPDFのポイント(pt)を1:1にする
-    # （旧fitz変換時のページサイズ=SVGのwidth/heightそのままpt、と揃えるため）。
-    subprocess.run(
-        [_find_rsvg_convert(), "-f", "pdf", "-d", "72", "-p", "72", "-o", str(out_path), str(svg_path)],
-        check=True,
-        env=env,
-    )
+    reg_font, bold_font = fonts_paths
+    doc = fitz.open()
+    page = doc.new_page(width=gca.W, height=gca.H)
+    page.insert_font(fontname="njp", fontfile=reg_font)
+    page.insert_font(fontname="njpb", fontfile=bold_font)
+    fonts = {False: fitz.Font(fontfile=reg_font), True: fitz.Font(fontfile=bold_font)}
+
+    for prim in primitives:
+        _draw_prim(page, fonts, prim)
+
+    doc.save(str(out_path), deflate=True, garbage=4)
+    doc.close()
 
 
 def reading_fit_report(reading_md):
@@ -157,8 +273,8 @@ def reading_fit_report(reading_md):
 
 def build_worksheet_pdf(data, reading_md, name):
     """data(dict) と reading_md(str) から2枚綴じワークシートPDFを生成し、
-    そのバイト列を返す（チャート1ページ目＝新デザインSVG／鑑定文2ページ目・A4）。
-    02_jyotish_sheet/output/ には何も残さない（一時フォルダで生成→読み取り→削除）。
+    そのバイト列を返す（チャート1ページ目＝新デザイン／鑑定文2ページ目・A4）。
+    sheet/output/ 相当の場所には何も残さない（一時フォルダで生成→読み取り→削除）。
     """
     tmp_dir = None
     tmp_json_path = None
@@ -166,9 +282,14 @@ def build_worksheet_pdf(data, reading_md, name):
     try:
         tmp_dir = Path(tempfile.mkdtemp(prefix="jyotish_worksheet_"))
 
-        # 1ページ目：チャート（新デザインSVGを直接PDF化）
+        primitives = gca.build_primitives(chart_json_to_svg_data(data, name.replace("_", " ")))
+        fonts_paths = _make_subset_fonts(
+            _used_characters(data, reading_md, primitives), tmp_dir
+        )
+
+        # 1ページ目：チャート（画面と同じ部品一覧から直接PDF化）
         chart_pdf = tmp_dir / f"{name}.pdf"
-        _build_chart_pdf(data, name, tmp_dir, chart_pdf)
+        _build_chart_pdf(primitives, fonts_paths, chart_pdf)
 
         # 材料をいったんファイルへ（既存の render_reading.build_reading はファイル入力の作り）
         with tempfile.NamedTemporaryFile(
@@ -186,7 +307,8 @@ def build_worksheet_pdf(data, reading_md, name):
         # 2ページ目：鑑定文（既存の render_reading.build_reading をそのまま再利用）
         reading_pdf = tmp_dir / f"{name}_reading.pdf"
         make_worksheet_set.build_reading(
-            tmp_md_path, tmp_json_path, str(make_worksheet_set.CALIB), str(reading_pdf)
+            tmp_md_path, tmp_json_path,
+            _calib_with_fonts(*fonts_paths, tmp_dir), str(reading_pdf)
         )
 
         # 綴じる（既存の bind_a4 をそのまま再利用）

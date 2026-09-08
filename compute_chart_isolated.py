@@ -18,8 +18,7 @@ compute_chart_isolated.py — compute_chart() を独立プロセスで実行す�
   （streamlit run を介さない状態）で丸ごと再実行してしまう不具合が実際に起きた
   （ログに "missing ScriptRunContext" が大量に出た）。streamlit run 環境と
   multiprocessing の既知の相性問題。subprocess で独立スクリプト
-  （compute_chart_worker.py）を起動する方式なら、この問題を回避できる
-  （build_worksheet_pdf.py の rsvg-convert 呼び出しと同じ方式）。
+  （compute_chart_worker.py）を起動する方式なら、この問題を回避できる。
 """
 import datetime as dt
 import json

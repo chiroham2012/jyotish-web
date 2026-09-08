@@ -9,6 +9,11 @@ v2 の変更点（見た目のみ。build_svg の入出力インターフェイ�
   - 惑星を「記号／度数」の列で揃え、セル中央にブロック配置（縦横センタリング）
   - 右の凡例＋下の凡例 → チャート下に一本化した整列グリッドへ
   - 罫線・装飾を軽く、余白を広めに（すっきりモダン）
+
+描画の持ち方（2026-09-08）:
+  各 draw_* は「部品の一覧」（rect/line/polygon/circle/text の辞書のリスト）を返し、
+  build_svg はそれをSVGへ、build_worksheet_pdf.py はそれを直接PDFへ描く。
+  レイアウトの計算をここ1か所に置くことで、画面（SVG）とPDFの見た目が食い違わない。
 """
 import math, sys, re
 
@@ -93,60 +98,71 @@ PERSON_DATA = {
 }
 
 # =============================================================
+# 部品（プリミティブ）の作り方。SVGにもPDFにも描けるよう、見た目の情報だけを持つ。
+def _rect(x, y, w, h, fill=None, stroke=None, width=1, rx=0):
+    return {"t": "rect", "x": x, "y": y, "w": w, "h": h,
+            "fill": fill, "stroke": stroke, "width": width, "rx": rx}
+
+def _line(x1, y1, x2, y2, stroke, width=1):
+    return {"t": "line", "x1": x1, "y1": y1, "x2": x2, "y2": y2,
+            "stroke": stroke, "width": width}
+
+def _polygon(points, stroke, width=1):
+    return {"t": "polygon", "points": points, "stroke": stroke, "width": width}
+
+def _circle(cx, cy, r, fill, opacity=1.0):
+    return {"t": "circle", "cx": cx, "cy": cy, "r": r, "fill": fill, "opacity": opacity}
+
+def _text(x, y, s, size, fill, bold=False, anchor="start", spacing=0):
+    # SVGは連続する空白を1つにまとめて表示する。ここで先に揃えておくことで、
+    # SVG（画面）とPDFで文字の並びが食い違わないようにする。
+    return {"t": "text", "x": x, "y": y, "s": " ".join(str(s).split()), "size": size,
+            "fill": fill, "bold": bold, "anchor": anchor, "spacing": spacing}
+
+
 def cell_xy(col, row):
     return CHART_X + col * CELL, CHART_Y + row * CELL
 
 def draw_title(name, birthinfo):
     mid = W / 2
-    return (
-        f'<text x="{mid}" y="90" font-family="{FONT}" '
-        f'font-size="42" font-weight="bold" text-anchor="middle" fill="{TEXT}" '
-        f'letter-spacing="1">{name}さん</text>\n'
-        f'<text x="{mid}" y="134" font-family="{FONT}" '
-        f'font-size="23" text-anchor="middle" fill="{TEXT}" letter-spacing="4">'
-        f'インド占星術 出生図</text>\n'
-        f'<text x="{mid}" y="172" font-family="{FONT}" '
-        f'font-size="14" text-anchor="middle" fill="{SUB}">{birthinfo}</text>'
-    )
+    return [
+        _text(mid, 90, f"{name}さん", 42, TEXT, bold=True, anchor="middle", spacing=1),
+        _text(mid, 134, "インド占星術 出生図", 23, TEXT, anchor="middle", spacing=4),
+        _text(mid, 172, birthinfo, 14, SUB, anchor="middle"),
+    ]
 
 def draw_grid():
     out = []
     # 外枠（細めで上品に）
-    out.append(f'<rect x="{CHART_X}" y="{CHART_Y}" width="{CHART_SIZE}" '
-               f'height="{CHART_SIZE}" fill="none" stroke="{LINE_DK}" '
-               f'stroke-width="2" rx="4"/>')
+    out.append(_rect(CHART_X, CHART_Y, CHART_SIZE, CHART_SIZE,
+                     stroke=LINE_DK, width=2, rx=4))
     # 内側の格子（さらに細く）
     for i in range(1, 4):
         x = CHART_X + i * CELL
-        out.append(f'<line x1="{x}" y1="{CHART_Y}" x2="{x}" '
-                   f'y2="{CHART_Y+CHART_SIZE}" stroke="{LINE}" stroke-width="1"/>')
+        out.append(_line(x, CHART_Y, x, CHART_Y + CHART_SIZE, LINE))
         y = CHART_Y + i * CELL
-        out.append(f'<line x1="{CHART_X}" y1="{y}" x2="{CHART_X+CHART_SIZE}" '
-                   f'y2="{y}" stroke="{LINE}" stroke-width="1"/>')
+        out.append(_line(CHART_X, y, CHART_X + CHART_SIZE, y, LINE))
     # 中央（2×2）に細いダイヤモンド1本だけ。装飾は最小限に。
     cx, cy = CHART_X + CHART_SIZE/2, CHART_Y + CHART_SIZE/2
     r = CELL - 18
-    out.append(f'<polygon points="{cx},{cy-r} {cx+r},{cy} {cx},{cy+r} {cx-r},{cy}" '
-               f'fill="none" stroke="{FAINT}" stroke-width="1"/>')
-    out.append(f'<circle cx="{cx}" cy="{cy}" r="3" fill="{FAINT}"/>')
-    return "\n".join(out)
+    out.append(_polygon([(cx, cy - r), (cx + r, cy), (cx, cy + r), (cx - r, cy)], FAINT))
+    out.append(_circle(cx, cy, 3, FAINT))
+    return out
 
 def draw_sign_labels():
     out = []
     for col, row, jp, _, _ in SIGNS:
         x, y = cell_xy(col, row)
-        out.append(f'<text x="{x+14}" y="{y+27}" font-family="{FONT}" '
-                   f'font-size="15" fill="{SUB}">{jp}</text>')
-    return "\n".join(out)
+        out.append(_text(x + 14, y + 27, jp, 15, SUB))
+    return out
 
 def draw_house_numbers(asc_sign_idx):
     out = []
     for col, row, _, _, sign_idx in SIGNS:
         x, y = cell_xy(col, row)
         house = ((sign_idx - asc_sign_idx) % 12) + 1
-        out.append(f'<text x="{x+CELL-13}" y="{y+CELL-13}" font-family="{FONT}" '
-                   f'font-size="15" fill="{FAINT}" text-anchor="end">{house}</text>')
-    return "\n".join(out)
+        out.append(_text(x + CELL - 13, y + CELL - 13, str(house), 15, FAINT, anchor="end"))
+    return out
 
 JP_SYM = {"Su":"太","Mo":"月","Me":"水","Ve":"金","Ma":"火","Ju":"木","Sa":"土",
           "Ur":"天","Ne":"海","Pl":"冥"}
@@ -193,27 +209,20 @@ def draw_planets(planets):
             is_retro  = code.endswith("R")
             base_code = code[:-1] if is_retro else code
             sym = JP_SYM.get(base_code, base_code)
-            out.append(f'<text x="{sym_cx:.1f}" y="{base:.1f}" font-family="{FONT}" '
-                       f'font-size="{sym_size:.1f}" font-weight="bold" fill="{color}" '
-                       f'text-anchor="middle">{sym}</text>')
+            out.append(_text(sym_cx, base, sym, sym_size, color, bold=True, anchor="middle"))
             if is_retro:
                 # 記号の右肩に小さく superscript として乗せる（度数の列とは重ならない位置）
-                out.append(f'<text x="{sym_cx+6*scale:.1f}" y="{base-12*scale:.1f}" '
-                           f'font-family="{FONT}" font-size="{r_size:.1f}" font-weight="bold" '
-                           f'fill="{color}">R</text>')
-            out.append(f'<text x="{deg_x:.1f}" y="{base:.1f}" font-family="{FONT}" '
-                       f'font-size="{deg_size:.1f}" fill="{color}">{deg}</text>')
-    return "\n".join(out)
+                out.append(_text(sym_cx + 6*scale, base - 12*scale, "R", r_size, color, bold=True))
+            out.append(_text(deg_x, base, deg, deg_size, color))
+    return out
 
 def draw_legend_below():
     """チャート下に一本化した凡例（2列×5行、中央揃え）。"""
     out = []
     top = CHART_Y + CHART_SIZE + 66
-    out.append(f'<text x="{W/2}" y="{top}" font-family="{FONT}" font-size="18" '
-               f'font-weight="bold" fill="{TEXT}" text-anchor="middle" '
-               f'letter-spacing="2">各記号が表す人生の要素</text>')
-    out.append(f'<line x1="{W/2-150}" y1="{top+14}" x2="{W/2+150}" y2="{top+14}" '
-               f'stroke="{FAINT}" stroke-width="1"/>')
+    out.append(_text(W/2, top, "各記号が表す人生の要素", 18, TEXT,
+                     bold=True, anchor="middle", spacing=2))
+    out.append(_line(W/2 - 150, top + 14, W/2 + 150, top + 14, FAINT))
 
     col_w = 430
     grid_x = CHART_X               # ← 凡例の左端をチャートの左端に揃える（左揃えのまま右へ）
@@ -227,29 +236,77 @@ def draw_legend_below():
             c, r = 1, i - LEFT
         cx = grid_x + c * col_w
         cy = gy + r * row_h
-        out.append(f'<circle cx="{cx+15}" cy="{cy-5}" r="14" fill="{color}" opacity="0.9"/>')
-        out.append(f'<text x="{cx+15}" y="{cy}" font-family="{FONT}" font-size="12" '
-                   f'font-weight="bold" fill="white" text-anchor="middle">{code}</text>')
-        out.append(f'<text x="{cx+40}" y="{cy-3}" font-family="{FONT}" font-size="14" '
-                   f'font-weight="bold" fill="{TEXT}">{name}</text>')
-        out.append(f'<text x="{cx+40}" y="{cy+14}" font-family="{FONT}" font-size="11.5" '
-                   f'fill="{SUB}">{meaning}</text>')
-    return "\n".join(out)
+        out.append(_circle(cx + 15, cy - 5, 14, color, opacity=0.9))
+        out.append(_text(cx + 15, cy, code, 12, "#ffffff", bold=True, anchor="middle"))
+        out.append(_text(cx + 40, cy - 3, name, 14, TEXT, bold=True))
+        out.append(_text(cx + 40, cy + 14, meaning, 11.5, SUB))
+    return out
 
-def build_svg(data):
+def build_primitives(data):
+    """チャート1枚ぶんの部品一覧を返す。SVG化もPDF化もこの一覧から行う。"""
     name, birthinfo, planets = data["name"], data["birthinfo"], data["planets"]
     asc_entries = [(c, s, d) for c, s, d in planets if c == "As"]
     if not asc_entries:
         raise ValueError("planets に As（アセンダント）がありません")
     asc_sign_idx = SIGN_IDX[asc_entries[0][1]]
-    parts = [
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}">',
-        f'<rect width="{W}" height="{H}" fill="{BG}"/>',
-        draw_title(name, birthinfo),
-        draw_grid(), draw_sign_labels(), draw_house_numbers(asc_sign_idx),
-        draw_planets(planets), draw_legend_below(),
-        '</svg>',
+    return [
+        _rect(0, 0, W, H, fill=BG),
+        *draw_title(name, birthinfo),
+        *draw_grid(),
+        *draw_sign_labels(),
+        *draw_house_numbers(asc_sign_idx),
+        *draw_planets(planets),
+        *draw_legend_below(),
     ]
+
+# ---------- SVGへの書き出し ----------
+def _n(v):
+    """座標・サイズをSVGの属性値へ。小数第1位まで（元の :.1f 表記に合わせる）。"""
+    r = round(float(v), 1)
+    return str(int(r)) if r == int(r) else str(r)
+
+def _esc(s):
+    """氏名など外部由来の文字列を属性・本文に安全に埋め込む。"""
+    return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+def _prim_to_svg(p):
+    t = p["t"]
+    if t == "rect":
+        a = f'x="{_n(p["x"])}" y="{_n(p["y"])}" width="{_n(p["w"])}" height="{_n(p["h"])}"'
+        a += f' fill="{p["fill"]}"' if p["fill"] else ' fill="none"'
+        if p["stroke"]:
+            a += f' stroke="{p["stroke"]}" stroke-width="{_n(p["width"])}"'
+        if p["rx"]:
+            a += f' rx="{_n(p["rx"])}"'
+        return f"<rect {a}/>"
+    if t == "line":
+        return (f'<line x1="{_n(p["x1"])}" y1="{_n(p["y1"])}" x2="{_n(p["x2"])}" '
+                f'y2="{_n(p["y2"])}" stroke="{p["stroke"]}" stroke-width="{_n(p["width"])}"/>')
+    if t == "polygon":
+        pts = " ".join(f"{_n(x)},{_n(y)}" for x, y in p["points"])
+        return (f'<polygon points="{pts}" fill="none" '
+                f'stroke="{p["stroke"]}" stroke-width="{_n(p["width"])}"/>')
+    if t == "circle":
+        a = f'cx="{_n(p["cx"])}" cy="{_n(p["cy"])}" r="{_n(p["r"])}" fill="{p["fill"]}"'
+        if p["opacity"] != 1.0:
+            a += f' opacity="{p["opacity"]}"'
+        return f"<circle {a}/>"
+    a = (f'x="{_n(p["x"])}" y="{_n(p["y"])}" font-family="{FONT}" '
+         f'font-size="{_n(p["size"])}"')
+    if p["bold"]:
+        a += ' font-weight="bold"'
+    if p["anchor"] != "start":
+        a += f' text-anchor="{p["anchor"]}"'
+    a += f' fill="{p["fill"]}"'
+    if p["spacing"]:
+        a += f' letter-spacing="{_n(p["spacing"])}"'
+    return f'<text {a}>{_esc(p["s"])}</text>'
+
+def build_svg(data):
+    parts = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" '
+             f'viewBox="0 0 {W} {H}">']
+    parts += [_prim_to_svg(p) for p in build_primitives(data)]
+    parts.append("</svg>")
     return "\n".join(parts)
 
 # =============================================================

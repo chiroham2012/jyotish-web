@@ -73,10 +73,12 @@ APP_PASSWORD = "好きな合言葉"
 - `cities_jp.py` … 出生地の選択肢（全国の市区町村 約1,900件＋緯度経度）。
   自動生成ファイルなので手で編集しないでください。
 
-## ⚠️ packages.txt を置いていない理由（2026-09-08）
+## ⚠️ packages.txt は置かないでください（2026-09-08）
 
 以前は `packages.txt` に `librsvg2-bin` と `ghostscript` を書いてOSにインストールして
-いましたが、**現在は置いていません**。理由は次のとおりです。
+いましたが、**もう不要になったので置いていません**。今後も置かないでください。
+
+### 置けなくなった経緯
 
 Streamlit Community Cloud の土台OSは Debian bullseye で、そのセキュリティ更新の提供が
 2026年8月末で終了しました。その結果、署名ファイル（`bullseye-security` の `InRelease`）が
@@ -87,19 +89,26 @@ E: Release file for .../dists/bullseye-security/InRelease is expired
 [00:42:32] ❗️ installer returned a non-zero exit code
 ```
 
-`packages.txt` があるとこの `apt-get` が必ず走るため、**アプリ自体が起動できなくなります**
-（`packages.txt` を置いている Streamlit Cloud のアプリは全部この状態です）。Streamlit側が
-土台OSを新しくするまで直りません。そこで `packages.txt` を外して復旧させました。
+`packages.txt` があるとこの `apt-get` が必ず走るため、**アプリ自体が起動できなくなります**。
 
-**影響：** Cloud上では `rsvg-convert` が無いため **PDFワークシートの作成だけができません**。
-`app.py` が `shutil.which("rsvg-convert")` で有無を見て、無ければPDFの節に
-「一時的にお休み中」と案内を出します（チャート表示・鑑定文の生成は通常どおり動きます）。
-`ghostscript` はもともと「無ければ軽量化を飛ばす」作りなので影響ありません。
-**手元のMac（`brew install librsvg` 済み）ではPDFも従来どおり作れます。**
+### そこで外部コマンド依存そのものをやめました
 
-**戻すとき：** Streamlit側の土台OSが新しくなったら、`git revert` するか
-`librsvg2-bin` と `ghostscript` の2行を書いた `packages.txt` を置き直せば元に戻ります。
-根治（rsvg依存そのものを外してPDFを復活させる）は別途検討。
+`packages.txt` で入れていた2つは、次のように置き換え済みです。
+
+| 元のソフト | 何に使っていたか | 今どうしているか |
+|---|---|---|
+| `librsvg2-bin`（rsvg-convert） | チャート図のSVGをPDFに変換 | SVGを経由せず、`generate_chart_auto.build_primitives()` の部品一覧から PyMuPDF で直接PDFに描く（`build_worksheet_pdf._build_chart_pdf`）。絵柄は変わりません |
+| `ghostscript` | 埋め込みフォントを「使った文字だけ」に絞ってPDFを軽くする | fontTools で同じことをする（`build_worksheet_pdf._subset_font`）。絞らないと2ページで約80MBになります |
+
+これで **pip で入るもの（`requirements.txt`）だけで完結** し、Streamlit側の土台OSが
+どうなっても影響を受けません。手元のMacでも同じコードで同じPDFが出ます。
+
+**フォント絞り込みの注意：** `_subset_font` の `options.retain_gids = True` は外さないで
+ください。外すと文字番号が振り直され、**PDF上で日本語だけが真っ白に消えます**
+（英数字は出るので気づきにくい）。
+
+**PyMuPDFのSVG読み取り機能には戻さないでください。** font-family指定を無視して内蔵の
+CJKフォントを使い、長音記号「ー」を落とします（「ラーフ」→「ラフ」／2026-07-09に実機で確認）。
 
 ## 出生地データの更新
 
