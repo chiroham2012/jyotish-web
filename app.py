@@ -21,6 +21,7 @@ import datetime as dt
 import json
 import os
 import re
+import shutil
 import traceback
 import streamlit as st
 from compute_chart_isolated import compute_chart_safe  # ← 別プロセスで実行し、セグフォルト等がアプリ全体を巻き込まないようにする
@@ -283,44 +284,63 @@ if data:
             mime="text/markdown",
         )
 
-        # --- PDFワークシート（チャート＋鑑定文の2枚綴じ・A4） ---
-        st.header("④ PDFを保存")
-        st.caption("チャート図と鑑定文をまとめた2ページのPDFを作成します。")
-        if st.button("PDFワークシートを作る", type="primary"):
-            try:
-                # 組版は枠に入りきらない分を黙って捨てるため、作る前に収まるか確かめる。
-                # 収まらないときも作成自体は止めない（何も手元に残らないと困るため）が、
-                # 欠けることを画面ではっきり知らせる。
-                overflow_msg = reading_fit_report(st.session_state["reading"])
-                with st.spinner("PDFワークシートを作っています…"):
-                    st.session_state["worksheet_pdf"] = build_worksheet_pdf(
-                        data, st.session_state["reading"], key
-                    )
-                st.session_state["worksheet_overflow"] = overflow_msg
-            except Exception as e:
-                _show_error("PDFの作成でエラーが発生しました。時間をおいて再度お試しください。", e)
-
+        # 異物混入の警告は、PDFが作れるかどうかに関わらず必ず出す（鑑定文そのものの問題のため）。
         if st.session_state.get("reading_stray"):
             st.warning(
                 "鑑定文に日本語以外の文字（"
                 + "、".join(st.session_state["reading_stray"])
                 + "）が紛れ込んでいます。「鑑定文を生成」をもう一度押して"
-                  "作り直してから、PDFにしてください。",
+                  "作り直してください。",
                 icon="⚠️",
             )
 
-        if st.session_state.get("worksheet_overflow"):
-            st.warning(
-                st.session_state["worksheet_overflow"]
-                + "\n\n「③ 鑑定文」の「鑑定文を生成」をもう一度押すと、"
-                  "別の文章が作られます。短めの文章になればすべて収まります。",
-                icon="⚠️",
-            )
+        # --- PDFワークシート（チャート＋鑑定文の2枚綴じ・A4） ---
+        st.header("④ PDFを保存")
 
-        if st.session_state.get("worksheet_pdf"):
-            st.download_button(
-                "ワークシートPDFをダウンロード",
-                data=st.session_state["worksheet_pdf"],
-                file_name=f"{key}_set.pdf",
-                mime="application/pdf",
+        # PDFの1ページ目（チャート図）は rsvg-convert（librsvg）に頼っている。これは
+        # packages.txt 経由でOSに入れていたが、Streamlit Cloud の土台OS（Debian bullseye）の
+        # セキュリティ更新が2026年8月末で終わり、その署名ファイルが期限切れになったため、
+        # apt がエラーで止まり packages.txt を持つアプリが起動できなくなった（2026-09-08）。
+        # 復旧のため packages.txt ごと外したので、Cloud側では rsvg-convert が入っていない。
+        # 手元のMac（brew install librsvg 済み）では従来どおり動く。
+        # ※ rsvg依存を外してPDFを復活させる根治は別途。それまではここで丁寧に知らせる。
+        if shutil.which("rsvg-convert") is None:
+            st.info(
+                "PDFの作成は、ただいま一時的にお休みしています。"
+                "アプリを動かしている場所の都合によるもので、鑑定の内容には影響ありません。\n\n"
+                "・鑑定文は、すぐ上の「鑑定文(.md)をダウンロード」から保存できます。\n"
+                "・チャート図は、「① チャート」の図を右クリック"
+                "（スマートフォンなら長押し）して画像として保存できます。",
+                icon="🛠️",
             )
+        else:
+            st.caption("チャート図と鑑定文をまとめた2ページのPDFを作成します。")
+            if st.button("PDFワークシートを作る", type="primary"):
+                try:
+                    # 組版は枠に入りきらない分を黙って捨てるため、作る前に収まるか確かめる。
+                    # 収まらないときも作成自体は止めない（何も手元に残らないと困るため）が、
+                    # 欠けることを画面ではっきり知らせる。
+                    overflow_msg = reading_fit_report(st.session_state["reading"])
+                    with st.spinner("PDFワークシートを作っています…"):
+                        st.session_state["worksheet_pdf"] = build_worksheet_pdf(
+                            data, st.session_state["reading"], key
+                        )
+                    st.session_state["worksheet_overflow"] = overflow_msg
+                except Exception as e:
+                    _show_error("PDFの作成でエラーが発生しました。時間をおいて再度お試しください。", e)
+
+            if st.session_state.get("worksheet_overflow"):
+                st.warning(
+                    st.session_state["worksheet_overflow"]
+                    + "\n\n「③ 鑑定文」の「鑑定文を生成」をもう一度押すと、"
+                      "別の文章が作られます。短めの文章になればすべて収まります。",
+                    icon="⚠️",
+                )
+
+            if st.session_state.get("worksheet_pdf"):
+                st.download_button(
+                    "ワークシートPDFをダウンロード",
+                    data=st.session_state["worksheet_pdf"],
+                    file_name=f"{key}_set.pdf",
+                    mime="application/pdf",
+                )

@@ -73,6 +73,34 @@ APP_PASSWORD = "好きな合言葉"
 - `cities_jp.py` … 出生地の選択肢（全国の市区町村 約1,900件＋緯度経度）。
   自動生成ファイルなので手で編集しないでください。
 
+## ⚠️ packages.txt を置いていない理由（2026-09-08）
+
+以前は `packages.txt` に `librsvg2-bin` と `ghostscript` を書いてOSにインストールして
+いましたが、**現在は置いていません**。理由は次のとおりです。
+
+Streamlit Community Cloud の土台OSは Debian bullseye で、そのセキュリティ更新の提供が
+2026年8月末で終了しました。その結果、署名ファイル（`bullseye-security` の `InRelease`）が
+期限切れになり、`apt-get` がエラーで止まるようになりました。
+
+```
+E: Release file for .../dists/bullseye-security/InRelease is expired
+[00:42:32] ❗️ installer returned a non-zero exit code
+```
+
+`packages.txt` があるとこの `apt-get` が必ず走るため、**アプリ自体が起動できなくなります**
+（`packages.txt` を置いている Streamlit Cloud のアプリは全部この状態です）。Streamlit側が
+土台OSを新しくするまで直りません。そこで `packages.txt` を外して復旧させました。
+
+**影響：** Cloud上では `rsvg-convert` が無いため **PDFワークシートの作成だけができません**。
+`app.py` が `shutil.which("rsvg-convert")` で有無を見て、無ければPDFの節に
+「一時的にお休み中」と案内を出します（チャート表示・鑑定文の生成は通常どおり動きます）。
+`ghostscript` はもともと「無ければ軽量化を飛ばす」作りなので影響ありません。
+**手元のMac（`brew install librsvg` 済み）ではPDFも従来どおり作れます。**
+
+**戻すとき：** Streamlit側の土台OSが新しくなったら、`git revert` するか
+`librsvg2-bin` と `ghostscript` の2行を書いた `packages.txt` を置き直せば元に戻ります。
+根治（rsvg依存そのものを外してPDFを復活させる）は別途検討。
+
 ## 出生地データの更新
 
 `cities_jp.py` は GeoNames（https://www.geonames.org/ ／CC BY 4.0）の日本データから
